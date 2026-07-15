@@ -1,0 +1,22 @@
+# Demand Sensing POC — S1 app skeleton
+streamlit>=1.36
+duckdb>=1.0
+pandas>=2.0
+numpy>=1.26
+altair>=5.0
+openpyxl>=3.1        # xlsx export / read
+pyarrow>=15.0        # parquet uploads
+pytest>=8.0
+
+# Engine tiers:
+statsforecast>=1.7   # optional AutoETS engine for the statistical tier (S6).
+                     # Import-guarded: the default statistical tier is a
+                     # self-contained damped-local-level model, so the suite runs
+                     # with or without this wheel. Flip
+                     # sensing.engine.USE_STATSFORECAST to A/B AutoETS.
+lightgbm>=4.0        # optional ML tier (S8): global quantile model behind
+                     # RunConfig.ml_enabled. Import-guarded like statsforecast —
+                     # with no wheel the tier falls back to a self-contained,
+                     # deterministic gradient-boosted-stumps learner, so the
+                     # suite runs with or without it. The champion–challenger
+                     # backtest decides ML-vs-statistical per series either way.
