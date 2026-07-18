@@ -30,7 +30,18 @@ from typing import Any
 
 import pandas as pd
 
-from .config import CANONICAL_SCHEMAS
+from .config import CANONICAL_SCHEMAS, REFERENCE_SCHEMAS
+
+
+def _schema_fields(name: str) -> dict[str, Any]:
+    """Return the ``fields`` dict for a canonical stream OR a reference
+    (dimension) schema. References (item_crosswalk, location_map) share the
+    exact same ``fields``/``role`` shape as a stream, so the mapper functions
+    below work against either — they just have to look in both registries."""
+    schema = CANONICAL_SCHEMAS.get(name) or REFERENCE_SCHEMAS.get(name)
+    if schema is None:
+        raise KeyError(name)
+    return schema["fields"]
 
 
 # --------------------------------------------------------------------------- #
@@ -168,7 +179,7 @@ def _role_of(series: pd.Series) -> str:
 
 def suggest_mapping(df: pd.DataFrame, stream: str) -> dict[str, str | None]:
     """Return canonical_field -> source_column best guesses (None if unknown)."""
-    fields = CANONICAL_SCHEMAS[stream]["fields"]
+    fields = _schema_fields(stream)
     cols = list(df.columns)
     norm_cols = {c: _norm(c) for c in cols}
     roles = {c: _role_of(df[c]) for c in cols}
@@ -208,7 +219,7 @@ def suggest_mapping(df: pd.DataFrame, stream: str) -> dict[str, str | None]:
 
 def missing_required(stream: str, mapping: dict[str, str | None]) -> list[str]:
     """Canonical fields that are required but currently unmapped/blank."""
-    fields = CANONICAL_SCHEMAS[stream]["fields"]
+    fields = _schema_fields(stream)
     return [c for c, m in fields.items() if m["required"] and not mapping.get(c)]
 
 
@@ -320,7 +331,7 @@ def apply_mapping(
     ``unit_multiplier`` converts eaches<->cases per file (e.g. 12).
     ``week_calendar`` controls retailer-week interpretation (optional).
     Returns (canonical_df, warnings)."""
-    fields = CANONICAL_SCHEMAS[stream]["fields"]
+    fields = _schema_fields(stream)
     warns: list[str] = []
     out = pd.DataFrame()
 
