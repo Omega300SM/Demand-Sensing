@@ -28,7 +28,7 @@ import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from sensing import Workspace, RunConfig, run_pipeline  # noqa: E402
-from sensing import quality, demo_data, config  # noqa: E402
+from sensing import quality, demo_data, config, ingest_ui  # noqa: E402
 
 
 # --------------------------------------------------------------------------- #
@@ -218,6 +218,46 @@ def test_load_qc_demo_lands_the_crosswalk_dimension(ws):
     assert ws.has_reference("item_crosswalk")
     xwalk = ws.read_reference("item_crosswalk")
     assert "SKU-Z" not in set(xwalk["item_id"].astype(str))
+
+
+def test_ingest_mapper_functions_work_on_reference_schemas():
+    """The upload page runs a reference file through the SAME ingest mapper as a
+    stream: suggest_mapping / missing_required / apply_mapping. Those functions
+    must resolve reference names (item_crosswalk, location_map) from
+    REFERENCE_SCHEMAS, not only CANONICAL_SCHEMAS — otherwise dropping a file on
+    a Master-data card raises KeyError('item_crosswalk')."""
+    raw = pd.DataFrame({
+        "retailer_item": ["R1", "R2"],
+        "item_id": ["SKU-A", "SKU-B"],
+    })
+    # suggest_mapping must not KeyError and should map the obvious id columns.
+    mapping = ingest_ui.suggest_mapping(raw, "item_crosswalk")
+    mapping.setdefault("source_item_id", "retailer_item")
+    mapping["source_item_id"] = "retailer_item"
+    mapping["item_id"] = "item_id"
+
+    # required fields resolve against the reference schema
+    assert ingest_ui.missing_required("item_crosswalk", mapping) == []
+
+    canonical, _ = ingest_ui.apply_mapping(raw, "item_crosswalk", mapping)
+    assert set(canonical["item_id"]) == {"SKU-A", "SKU-B"}
+    assert set(canonical["source_item_id"]) == {"R1", "R2"}
+
+    # location_map too (the second reference slot)
+    loc = pd.DataFrame({"store": ["East", "West"], "region": ["East", "West"]})
+    lm = ingest_ui.suggest_mapping(loc, "location_map")
+    lm["source_location_id"] = "store"
+    lm["region"] = "region"
+    assert ingest_ui.missing_required("location_map", lm) == []
+    out, _ = ingest_ui.apply_mapping(loc, "location_map", lm)
+    assert set(out["region"]) == {"East", "West"}
+
+
+def test_ingest_schema_lookup_rejects_unknown_names():
+    """The resolver still fails loudly for a genuinely unknown name."""
+    import pytest as _pytest
+    with _pytest.raises(KeyError):
+        ingest_ui.suggest_mapping(pd.DataFrame({"a": [1]}), "not_a_stream")
 
 
 def test_quality_py_unchanged_signature():
