@@ -79,6 +79,17 @@ class Workspace:
                 )
                 """
             )
+            con.execute(
+                """
+                CREATE TABLE IF NOT EXISTS references_log (
+                    name         VARCHAR PRIMARY KEY,
+                    table_name   VARCHAR,
+                    source_name  VARCHAR,
+                    row_count    BIGINT,
+                    uploaded_at  TIMESTAMP
+                )
+                """
+            )
 
     # ---- snapshots --------------------------------------------------------- #
     def add_snapshot(
@@ -134,6 +145,48 @@ class Workspace:
     def latest_snapshot(self, stream: str) -> str | None:
         df = self.list_snapshots(stream)
         return df.iloc[0]["table_name"] if len(df) else None
+
+    # ---- references (dimensions) ------------------------------------------ #
+    #
+    # Master data (item crosswalk, location map) lands as ``dim_<name>`` tables.
+    # Unlike snapshots these are **replace-on-upload, not stacked** — a crosswalk
+    # is current-state master data, not an append-only fact history, so nobody
+    # wants last-write-wins grain de-dup on it. ``rebuild_canonical`` never
+    # touches these and they are not ``canonical_*``, so the engine's
+    # read-only-canonical rule holds by construction. A lineage row is kept for
+    # traceability.
+
+    def add_reference(self, name: str, df: pd.DataFrame, source_name: str) -> str:
+        """Persist ``df`` as the current-state ``dim_<name>`` table (replacing any
+        prior version) and record lineage. Returns the dim table name."""
+        table_name = f"dim_{name}"
+        with self.connect() as con:
+            con.execute(f'DROP TABLE IF EXISTS "{table_name}"')
+            con.register("incoming", df)
+            con.execute(f'CREATE TABLE "{table_name}" AS SELECT * FROM incoming')
+            con.unregister("incoming")
+            con.execute("DELETE FROM references_log WHERE name = ?", [name])
+            con.execute(
+                "INSERT INTO references_log VALUES (?,?,?,?,?)",
+                [name, table_name, source_name, int(len(df)), datetime.now()],
+            )
+        return table_name
+
+    def has_reference(self, name: str) -> bool:
+        with self.connect() as con:
+            rows = con.execute(
+                "SELECT table_name FROM information_schema.tables "
+                "WHERE table_name = ?",
+                [f"dim_{name}"],
+            ).fetchall()
+        return len(rows) > 0
+
+    def read_reference(self, name: str) -> pd.DataFrame | None:
+        """Return the current ``dim_<name>`` frame, or ``None`` if never uploaded."""
+        if not self.has_reference(name):
+            return None
+        with self.connect() as con:
+            return con.execute(f'SELECT * FROM "dim_{name}"').df()
 
     # ---- canonical tables -------------------------------------------------- #
     @staticmethod

@@ -188,6 +188,18 @@ def write_templates(templates_dir: str) -> dict[str, str]:
     for stream, path in write_defects_fixtures(demo_dir).items():
         written[f"defects_{stream}"] = path
 
+    # Reference (dimension) templates — header-only, so a planner can fill and
+    # upload master data under the Master-data cards (S9).
+    reference_headers = {
+        "item_crosswalk": ["source_item_id", "item_id",
+                           "units_per_case", "successor_item_id"],
+        "location_map": ["source_location_id", "region"],
+    }
+    for name, headers in reference_headers.items():
+        tmpl_path = os.path.join(templates_dir, f"template_{name}.csv")
+        pd.DataFrame(columns=headers).to_csv(tmpl_path, index=False)
+        written[f"template_{name}"] = tmpl_path
+
     return written
 
 
@@ -376,6 +388,30 @@ def defects_fixtures() -> dict[str, pd.DataFrame]:
             "demand_plan": plan, "promo": promo}
 
 
+def defects_crosswalk() -> pd.DataFrame:
+    """Master item list for the defects demo: every base SKU, and deliberately
+    NOT the unmatched item (``SKU-Z``) seeded into shipments.
+
+    A crosswalk is dateless, unit-less master data (``source_item_id`` ->
+    ``item_id``); here the retailer item id and the internal SKU coincide,
+    because the POC's crosswalk *measures* match rate and never remaps. Omitting
+    SKU-Z is what makes gate 7 fire for a real reason on the shipments card —
+    an item present in the data that master data has never heard of.
+    """
+    skus = sorted({sku for sku, _ in _DEFECTS_BASE} |
+                  {sku for sku, _ in _DEFECTS_ADD})    # SKU-A, SKU-B, SKU-C
+    return pd.DataFrame({"source_item_id": skus, "item_id": skus})
+
+
+def defects_location_map() -> pd.DataFrame:
+    """Location -> region map for the defects demo (optional reference).
+
+    The demo already uses canonical region names, so the map is identity; it
+    exists so the second reference slot has a concrete, downloadable template."""
+    regions = sorted({region for _, region in _DEFECTS_BASE})
+    return pd.DataFrame({"source_location_id": regions, "region": regions})
+
+
 def defects_as_of() -> date:
     """The reference date the freshness gate should be evaluated against for the
     QC-defects demo (the last base week). Only channel_inventory trips it."""
@@ -402,6 +438,10 @@ def load_qc_demo_into_workspace(workspace) -> dict[str, int]:
     data = defects_fixtures()
     for stream, df in data.items():
         workspace.add_snapshot(stream, df, source_name="qc_defects_demo", suffix="qcdemo")
+    # Land the item crosswalk as a dimension so gate 7 measures against REAL
+    # master data (which omits SKU-Z) rather than a POS-derived stand-in.
+    workspace.add_reference("item_crosswalk", defects_crosswalk(),
+                            source_name="qc_demo")
     return workspace.rebuild_canonical()
 
 

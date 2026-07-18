@@ -7,7 +7,7 @@ so the ingestion layer (ingest_ui) and the engine agree on column names.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
+from dataclasses import dataclass, asdict
 from datetime import date
 from typing import Any
 
@@ -74,6 +74,49 @@ CANONICAL_SCHEMAS: dict[str, dict[str, Any]] = {
 }
 
 STREAM_ORDER = ["pos", "channel_inventory", "shipments", "demand_plan", "promo"]
+
+
+# --------------------------------------------------------------------------- #
+# Reference (dimension) schemas — parallel to CANONICAL_SCHEMAS, NOT streams.
+#
+# A reference is current-state master data: dateless, unit-less, keyed by a
+# source id -> canonical id. It lands in the workspace as a ``dim_*`` table
+# (replace-on-upload), is never part of ``STREAM_ORDER`` / ``CANONICAL_SCHEMAS``,
+# and the engine never reads it — only ``quality.py`` consumes the crosswalk, to
+# measure item match rate. Deliberately **no ``date`` role anywhere**: every
+# canonical stream requires a ``week``, and _grain_keys / snapshot_coverage /
+# freshness all depend on that; a dimension has no week, so it must stay out of
+# the stream contracts. Same ``fields``/``role`` shape as a stream, so the
+# ingest mapper (suggest_mapping / apply_mapping / missing_required) works
+# against it unchanged.
+#
+# The crosswalk MEASURES match rate only — it never remaps ``item_id`` at
+# rebuild. ``units_per_case`` / ``successor_item_id`` are carried for the v2
+# graduation (harmonize.py / M1) and are unused in S9.
+# --------------------------------------------------------------------------- #
+
+REFERENCE_SCHEMAS: dict[str, dict[str, Any]] = {
+    "item_crosswalk": {
+        "label": "Item crosswalk (retailer item → SKU)",
+        "required": True,          # design §3.1: crosswalk is required
+        "fields": {
+            "source_item_id":    {"role": "id", "required": True},
+            "item_id":           {"role": "id", "required": True},
+            "units_per_case":    {"role": "numeric", "required": False},
+            "successor_item_id": {"role": "id", "required": False},
+        },
+    },
+    "location_map": {
+        "label": "Location → region map",
+        "required": False,
+        "fields": {
+            "source_location_id": {"role": "id", "required": True},
+            "region":             {"role": "id", "required": True},
+        },
+    },
+}
+
+REFERENCE_ORDER = ["item_crosswalk", "location_map"]
 
 
 @dataclass
